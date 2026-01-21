@@ -436,12 +436,113 @@ function deleteTeam(id) {
 
 function renderTeamList() {
     const list = document.getElementById('teamList');
-    list.innerHTML = state.teams.map(team => `
-        <div class="setting-item">
-            <span>${team.name}</span>
-            <button class="btn btn-danger btn-sm" onclick="deleteTeam(${team.id})">삭제</button>
-        </div>
-    `).join('') || '<p class="empty-state">등록된 팀이 없습니다.</p>';
+
+    if (state.teams.length === 0) {
+        list.innerHTML = '<p class="empty-state">등록된 팀이 없습니다.</p>';
+        return;
+    }
+
+    let html = `
+        <table class="settings-table">
+            <thead>
+                <tr>
+                    <th>팀명</th>
+                    <th style="width: 140px; text-align: center;">관리</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    html += state.teams.map(team => {
+        // 수정 모드인지 확인 (state에 editingTeamId가 있다고 가정)
+        if (state.editingTeamId === team.id) {
+            return `
+                <tr>
+                    <td>
+                        <input type="text" id="edit-team-${team.id}" value="${team.name}" 
+                               onkeydown="if(event.key === 'Enter') updateTeam(${team.id})">
+                    </td>
+                    <td>
+                        <div class="table-actions">
+                            <button class="btn btn-sm btn-save" onclick="updateTeam(${team.id})">저장</button>
+                            <button class="btn btn-sm btn-cancel" onclick="cancelEdit()">취소</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        } else {
+            return `
+                <tr>
+                    <td>${team.name}</td>
+                    <td>
+                        <div class="table-actions">
+                            <button class="btn btn-sm btn-edit" onclick="editTeam(${team.id})">수정</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteTeam(${team.id})">삭제</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+    }).join('');
+
+    html += `
+            </tbody>
+        </table>
+    `;
+
+    list.innerHTML = html;
+}
+
+// 팀 수정 모드 진입
+function editTeam(id) {
+    state.editingTeamId = id;
+    renderTeamList();
+    // 포커스 이동
+    setTimeout(() => {
+        const input = document.getElementById(`edit-team-${id}`);
+        if (input) input.focus();
+    }, 0);
+}
+
+// 팀 수정 취소
+function cancelEdit() {
+    state.editingTeamId = null;
+    renderTeamList();
+}
+
+// 팀 수정 저장
+function updateTeam(id) {
+    const input = document.getElementById(`edit-team-${id}`);
+    const newName = input.value.trim();
+
+    if (!newName) {
+        showToast('팀 이름을 입력해주세요.', 'error');
+        return;
+    }
+
+    if (state.teams.some(t => t.name === newName && t.id !== id)) {
+        showToast('이미 존재하는 팀 이름입니다.', 'error');
+        return;
+    }
+
+    // 팀 이름 업데이트
+    const team = state.teams.find(t => t.id === id);
+    if (team) {
+        team.name = newName;
+        state.editingTeamId = null;
+        saveToStorage();
+        renderTeamList();
+        renderTeamSelect(); // 멤버폼 갱신
+        renderMembers(); // 멤버리스트 갱신 (팀명이 바뀌었으므로)
+        updateHeaderTeamSelect(); // 헤더 드롭다운 갱신
+
+        // 만약 현재 선택된 팀이라면 헤더 타이틀도 업데이트
+        if (state.currentTeamId === id) {
+            updateHeader();
+        }
+
+        showToast('팀 이름이 수정되었습니다.', 'success');
+    }
 }
 
 function renderTeamSelect() {
@@ -1317,3 +1418,6 @@ window.openTeamModal = openTeamModal;
 window.closeTeamModal = closeTeamModal;
 window.deleteTeam = deleteTeam;
 window.toggleTeamDropdown = toggleTeamDropdown;
+window.editTeam = editTeam;
+window.cancelEdit = cancelEdit;
+window.updateTeam = updateTeam;

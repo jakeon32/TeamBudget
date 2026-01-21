@@ -1140,10 +1140,70 @@ body {
     font-weight: 500;
 }
 
-.role-badge {
-    background-color: #f1f5f9;
-    color: #475569;
-    padding: 2px 8px;
+
+/* Settings Table */
+.settings-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 16px;
+}
+
+.settings-table th,
+.settings-table td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+.settings-table th {
+    background: var(--bg);
+    font-weight: 600;
+    color: var(--text-light);
+    font-size: 0.875rem;
+}
+
+.settings-table td input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
     border-radius: 4px;
-    font-size: 0.8rem;
+    font-size: 0.95rem;
+}
+
+.table-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.btn-group {
+    display: flex;
+    gap: 4px;
+}
+
+.btn-edit {
+    background: #3b82f6;
+    color: white;
+}
+
+.btn-edit:hover {
+    background: #2563eb;
+}
+
+.btn-save {
+    background: var(--success);
+    color: white;
+}
+
+.btn-save:hover {
+    background: #059669;
+}
+
+.btn-cancel {
+    background: var(--text-light);
+    color: white;
+}
+
+.btn-cancel:hover {
+    background: #475569;
 }
