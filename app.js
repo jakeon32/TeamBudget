@@ -1123,30 +1123,7 @@ function renderRecentExpenses() {
         `;
     }).join('');
 
-    // 월 정기 구독 목록 표시
-    if (state.subscriptions.length > 0) {
-        html += `<div class="subscriptions-section"><h3>월 정기 구독 목록</h3>`;
-        html += state.subscriptions.map(sub => {
-            const member = state.members.find(m => m.id === sub.memberId);
-            const memberName = member ? member.name : '알 수 없음';
-            return `
-                <div class="expense-item subscription-item">
-                    <div class="info">
-                        <span class="category-badge">${sub.category}</span>
-                        <div>
-                            <div class="description">${sub.description}<span class="subscription-badge">월정기</span></div>
-                            <div class="member">${memberName} · 매월 반복</div>
-                        </div>
-                    </div>
-                    <div class="amount-actions">
-                        <span class="amount">₩${sub.amountKRW.toLocaleString('ko-KR')}/월</span>
-                        <button class="btn btn-danger btn-sm" onclick="deleteSubscription(${sub.id})">삭제</button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-        html += `</div>`;
-    }
+
 
     container.innerHTML = html;
 }
