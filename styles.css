@@ -54,10 +54,110 @@ body {
     margin-bottom: 24px;
 }
 
-.header h1 {
+
+
+/* Title Dropdown */
+.title-dropdown {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    position: relative;
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    transition: background 0.2s;
+    user-select: none;
+}
+
+.title-dropdown:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.dropdown-arrow {
+    font-size: 0.8rem;
+    opacity: 0.7;
+    transition: transform 0.2s;
+}
+
+.title-dropdown.active .dropdown-arrow {
+    transform: rotate(180deg);
+}
+
+.title-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    min-width: 100%;
+    background: white;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    margin-top: 8px;
+    padding: 8px;
+    animation: fadeIn 0.2s ease;
+}
+
+.title-dropdown.active .title-dropdown-menu {
+    display: block;
+}
+
+.dropdown-item {
+    padding: 10px 16px;
+    color: var(--text);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.dropdown-item:hover {
+    background: var(--bg);
+}
+
+.dropdown-item.active {
+    background: #e0e7ff;
+    color: var(--primary);
+}
+
+.title-dropdown h1 {
     font-size: 1.75rem;
     font-weight: 700;
-    margin-bottom: 0;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.header-title {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.team-selector select {
+    padding: 8px 16px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.15);
+    color: white;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.team-selector select:hover {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.team-selector select:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.team-selector select option {
+    background: var(--primary-dark);
+    color: white;
 }
 
 .quarter-selector select {

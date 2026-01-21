@@ -16,10 +16,11 @@ let state = {
     members: [],
     expenses: [],
     subscriptions: [], // 월 정기 구독 목록
-    teams: [], // 팀 목록
+    teams: [], // 팀 목록 (각 팀은 { id, name, quarterBudget } 구조)
     exchangeRate: 1450, // 기본 환율 (실시간으로 업데이트됨)
     currentQuarter: 1, // 현재 선택된 분기
-    // 설정 (기본값)
+    currentTeamId: null, // 현재 선택된 팀 ID
+    // 설정 (기본값) - 하위 호환용
     config: {
         teamName: '팀 운영비 관리',
         quarterBudget: 0
@@ -54,8 +55,10 @@ function loadFromStorage() {
             state.config = { ...state.config, ...data.config };
         }
 
-        // 기존 데이터 마이그레이션: isSubscription 필드가 없는 경우 추가
+        // 기존 데이터 마이그레이션
         let needsSave = false;
+
+        // 1. isSubscription 필드가 없는 경우 추가
         state.expenses = state.expenses.map(expense => {
             if (expense.isSubscription === undefined) {
                 needsSave = true;
@@ -68,6 +71,33 @@ function loadFromStorage() {
             return expense;
         });
 
+        // 2. '크리에이티브' 팀이 있고, teamId가 없는 멤버들에게 해당 팀 할당
+        const creativeTeam = state.teams.find(t => t.name === '크리에이티브');
+        if (creativeTeam) {
+            state.members.forEach(member => {
+                if (!member.teamId) {
+                    member.teamId = creativeTeam.id;
+                    needsSave = true;
+                }
+            });
+        }
+
+        // 3. 팀에 quarterBudget 필드가 없는 경우 추가 (기존 config에서 마이그레이션)
+        state.teams.forEach(team => {
+            if (team.quarterBudget === undefined) {
+                team.quarterBudget = state.config.quarterBudget || 0;
+                needsSave = true;
+            }
+        });
+
+        // 4. currentTeamId 복원
+        if (data.currentTeamId && state.teams.some(t => t.id === data.currentTeamId)) {
+            state.currentTeamId = data.currentTeamId;
+        } else if (state.teams.length > 0) {
+            // 첫 번째 팀을 기본 선택
+            state.currentTeamId = state.teams[0].id;
+        }
+
         if (needsSave) {
             saveToStorage();
         }
@@ -76,6 +106,11 @@ function loadFromStorage() {
     // 현재 월에 맞는 분기 자동 선택
     const currentMonth = new Date().getMonth() + 1;
     state.currentQuarter = Math.ceil(currentMonth / 3);
+
+    // 첫 번째 팀을 기본 선택 (팀이 있고 선택된 팀이 없는 경우)
+    if (state.teams.length > 0 && !state.currentTeamId) {
+        state.currentTeamId = state.teams[0].id;
+    }
     document.getElementById('quarterSelect').value = state.currentQuarter;
 }
 
@@ -86,7 +121,8 @@ function saveToStorage() {
         expenses: state.expenses,
         subscriptions: state.subscriptions,
         teams: state.teams,
-        config: state.config
+        config: state.config,
+        currentTeamId: state.currentTeamId
     }));
 }
 
@@ -97,6 +133,50 @@ function changeQuarter() {
     updateFilterMonths();
     renderAll();
 }
+
+// 팀 변경
+function changeTeam(teamId) {
+    state.currentTeamId = Number(teamId);
+    saveToStorage();
+    renderAll();
+
+    // 드롭다운 닫기
+    const dropdown = document.querySelector('.title-dropdown');
+    if (dropdown) dropdown.classList.remove('active');
+}
+
+// 헤더 팀 선택 드롭다운 토글
+function toggleTeamDropdown(e) {
+    if (e) e.stopPropagation();
+    const dropdown = document.querySelector('.title-dropdown');
+    dropdown.classList.toggle('active');
+}
+
+// 헤더 팀 선택 메뉴 업데이트 (커스텀 드롭다운)
+function updateHeaderTeamSelect() {
+    const menuContainer = document.getElementById('teamDropdownMenu');
+    if (!menuContainer) return;
+
+    if (state.teams.length === 0) {
+        menuContainer.innerHTML = '<div class="dropdown-item">등록된 팀 없음</div>';
+        return;
+    }
+
+    menuContainer.innerHTML = state.teams.map(t => `
+        <div class="dropdown-item ${t.id === state.currentTeamId ? 'active' : ''}" 
+             onclick="changeTeam(${t.id})">
+            ${t.name}
+        </div>
+    `).join('');
+}
+
+// 외부 클릭 시 드롭다운 닫기
+document.addEventListener('click', function (e) {
+    const dropdown = document.querySelector('.title-dropdown');
+    if (dropdown && dropdown.classList.contains('active') && !dropdown.contains(e.target)) {
+        dropdown.classList.remove('active');
+    }
+});
 
 // 필터 월 옵션 업데이트
 function updateFilterMonths() {
@@ -112,63 +192,82 @@ function updateFilterMonths() {
     });
 }
 
-// 현재 분기의 지출 + 구독 계산 데이터 가져오기
+// 현재 팀의 예산 가져오기
+function getCurrentTeamBudget() {
+    if (!state.currentTeamId) return 0;
+    const team = state.teams.find(t => t.id === state.currentTeamId);
+    return team ? (team.quarterBudget || 0) : 0;
+}
+
+// 현재 팀의 멤버 ID 목록 가져오기
+function getCurrentTeamMemberIds() {
+    if (!state.currentTeamId) return [];
+    return state.members
+        .filter(m => m.teamId === state.currentTeamId)
+        .map(m => m.id);
+}
+
+// 현재 분기의 지출 + 구독 계산 데이터 가져오기 (현재 팀 기준)
 function getQuarterExpenses() {
     const months = QUARTER_MONTHS[state.currentQuarter];
     const year = new Date().getFullYear();
+    const teamMemberIds = getCurrentTeamMemberIds();
 
-    // 일반 지출 필터링
+    // 일반 지출 필터링 (현재 팀 멤버의 지출만)
     const regularExpenses = state.expenses.filter(expense => {
         const expenseMonth = new Date(expense.date).getMonth() + 1;
         const expenseYear = new Date(expense.date).getFullYear();
-        return expenseYear === year && months.includes(expenseMonth);
+        const isInTeam = teamMemberIds.includes(expense.memberId);
+        return isInTeam && expenseYear === year && months.includes(expenseMonth);
     });
 
-    // 구독 서비스: 각 월마다 가상의 지출로 계산
+    // 구독 서비스: 각 월마다 가상의 지출로 계산 (현재 팀 멤버의 구독만)
     const subscriptionExpenses = [];
-    state.subscriptions.forEach(sub => {
-        months.forEach(month => {
-            // 해당 월에 이미 확정된 지출이 있는지 확인
-            const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
-            const isConfirmed = state.expenses.some(e =>
-                e.subscriptionId === sub.id &&
-                e.subscriptionMonth === yearMonth
-            );
+    state.subscriptions
+        .filter(sub => teamMemberIds.includes(sub.memberId))
+        .forEach(sub => {
+            months.forEach(month => {
+                // 해당 월에 이미 확정된 지출이 있는지 확인
+                const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+                const isConfirmed = state.expenses.some(e =>
+                    e.subscriptionId === sub.id &&
+                    e.subscriptionMonth === yearMonth
+                );
 
-            if (!isConfirmed) {
-                // 결제일 계산 (기존 생성일의 '일' 사용)
-                const createdDay = new Date(sub.createdAt).getDate();
-                const paymentDate = new Date(year, month - 1, createdDay);
-                const today = new Date();
+                if (!isConfirmed) {
+                    // 결제일 계산 (기존 생성일의 '일' 사용)
+                    const createdDay = new Date(sub.createdAt).getDate();
+                    const paymentDate = new Date(year, month - 1, createdDay);
+                    const today = new Date();
 
-                // 만약 생성일이 말일이라서 현재 월에 해당 일자가 없다면 말일로 조정 (예: 31일 -> 2월 28일)
-                if (paymentDate.getMonth() !== month - 1) {
-                    paymentDate.setDate(0); // 전달 말일(=이번달 0일)인데 로직상 좀 복잡하니 단순화
-                    // JS Date setDate(0)는 전달 마지막날. 
-                    // 그냥 해당 월의 마지막 날짜를 구해서 비교하는게 나음.
+                    // 만약 생성일이 말일이라서 현재 월에 해당 일자가 없다면 말일로 조정 (예: 31일 -> 2월 28일)
+                    if (paymentDate.getMonth() !== month - 1) {
+                        paymentDate.setDate(0); // 전달 말일(=이번달 0일)인데 로직상 좀 복잡하니 단순화
+                        // JS Date setDate(0)는 전달 마지막날. 
+                        // 그냥 해당 월의 마지막 날짜를 구해서 비교하는게 나음.
+                    }
+
+                    // 정확한 날짜 재계산
+                    const lastDayOfMonth = new Date(year, month, 0).getDate();
+                    const targetDay = Math.min(createdDay, lastDayOfMonth);
+                    const targetDateStr = `${year}-${String(month).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+                    const targetDateObj = new Date(targetDateStr);
+
+                    // 결제일이 지났는지 여부
+                    const isDue = targetDateObj <= today;
+
+                    subscriptionExpenses.push({
+                        ...sub,
+                        id: `sub-${sub.id}-${month}`,
+                        originalId: sub.id, // 원본 ID 유지
+                        date: targetDateStr,
+                        isVirtual: true, // 가상 지출 표시
+                        isDue: isDue, // 결제일 도래/경과 여부
+                        subscriptionMonth: yearMonth
+                    });
                 }
-
-                // 정확한 날짜 재계산
-                const lastDayOfMonth = new Date(year, month, 0).getDate();
-                const targetDay = Math.min(createdDay, lastDayOfMonth);
-                const targetDateStr = `${year}-${String(month).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
-                const targetDateObj = new Date(targetDateStr);
-
-                // 결제일이 지났는지 여부
-                const isDue = targetDateObj <= today;
-
-                subscriptionExpenses.push({
-                    ...sub,
-                    id: `sub-${sub.id}-${month}`,
-                    originalId: sub.id, // 원본 ID 유지
-                    date: targetDateStr,
-                    isVirtual: true, // 가상 지출 표시
-                    isDue: isDue, // 결제일 도래/경과 여부
-                    subscriptionMonth: yearMonth
-                });
-            }
+            });
         });
-    });
 
     return [...regularExpenses, ...subscriptionExpenses];
 }
@@ -222,6 +321,9 @@ function initForms() {
     // 설정 폼
     document.getElementById('settingsForm').addEventListener('submit', handleSettingsSubmit);
 
+    // 팀 등록 폼
+    document.getElementById('teamForm').addEventListener('submit', handleTeamSubmit);
+
     // 통화 선택 변경 시 환산 금액 표시
     document.getElementById('expenseCurrency').addEventListener('change', updateConvertedAmount);
     document.getElementById('expenseAmount').addEventListener('input', updateConvertedAmount);
@@ -232,8 +334,21 @@ function initForms() {
 
 // ============ 설정 관리 ============
 function openSettingsModal() {
-    document.getElementById('settingTeamName').value = state.config.teamName;
-    document.getElementById('settingBudget').value = state.config.quarterBudget;
+    // 현재 선택된 팀의 예산 표시
+    const currentTeam = state.teams.find(t => t.id === state.currentTeamId);
+    const teamNameDisplay = document.getElementById('settingTeamName');
+
+    if (currentTeam) {
+        // select를 읽기 전용 표시로 변경
+        teamNameDisplay.innerHTML = `<option value="${currentTeam.id}" selected>${currentTeam.name}</option>`;
+        teamNameDisplay.disabled = true;
+        document.getElementById('settingBudget').value = currentTeam.quarterBudget || 0;
+    } else {
+        teamNameDisplay.innerHTML = '<option value="">팀을 먼저 선택해주세요</option>';
+        teamNameDisplay.disabled = true;
+        document.getElementById('settingBudget').value = 0;
+    }
+
     document.getElementById('settingsModal').classList.add('active');
 }
 
@@ -244,21 +359,28 @@ function closeSettingsModal() {
 function handleSettingsSubmit(e) {
     e.preventDefault();
 
-    const teamName = document.getElementById('settingTeamName').value.trim();
-    const budget = parseInt(document.getElementById('settingBudget').value);
-
-    if (!teamName || isNaN(budget) || budget < 0) {
-        showToast('유효한 값을 입력해주세요.', 'error');
+    if (!state.currentTeamId) {
+        showToast('상단에서 팀을 먼저 선택해주세요.', 'error');
         return;
     }
 
-    state.config.teamName = teamName;
-    state.config.quarterBudget = budget;
+    const budget = parseInt(document.getElementById('settingBudget').value);
+
+    if (isNaN(budget) || budget < 0) {
+        showToast('올바른 예산을 입력해주세요.', 'error');
+        return;
+    }
+
+    // 현재 팀의 예산 업데이트
+    const team = state.teams.find(t => t.id === state.currentTeamId);
+    if (team) {
+        team.quarterBudget = budget;
+    }
 
     saveToStorage();
     renderAll();
     closeSettingsModal();
-    showToast('설정이 저장되었습니다.', 'success');
+    showToast('예산이 저장되었습니다.', 'success');
 }
 
 // 팀 관리 로직
@@ -403,13 +525,35 @@ function deleteMember(id) {
 
 function renderMemberList() {
     const container = document.getElementById('memberList');
+    const filterSelect = document.getElementById('memberListTeamFilter');
 
-    if (state.members.length === 0) {
-        container.innerHTML = '<p class="empty-state">등록된 팀원이 없습니다.</p>';
+    // 팀 필터 드롭다운 업데이트
+    if (filterSelect) {
+        const currentFilterVal = filterSelect.value;
+        filterSelect.innerHTML = '<option value="">팀 선택</option>' +
+            state.teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+        // 가능한 경우 이전 선택값 유지
+        if (currentFilterVal && state.teams.some(t => t.id == currentFilterVal)) {
+            filterSelect.value = currentFilterVal;
+        }
+    }
+
+    // 팀이 선택되지 않은 경우
+    const selectedTeamId = filterSelect ? filterSelect.value : '';
+    if (!selectedTeamId) {
+        container.innerHTML = '<p class="empty-state">팀을 선택해주세요.</p>';
         return;
     }
 
-    container.innerHTML = state.members.map(member => {
+    // 선택된 팀의 멤버만 필터링
+    const filteredMembers = state.members.filter(m => m.teamId == selectedTeamId);
+
+    if (filteredMembers.length === 0) {
+        container.innerHTML = '<p class="empty-state">해당 팀에 등록된 팀원이 없습니다.</p>';
+        return;
+    }
+
+    container.innerHTML = filteredMembers.map(member => {
         const initial = member.name.charAt(0);
         const memberExpenses = state.expenses.filter(e => e.memberId === member.id);
         const totalUsed = memberExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
@@ -671,6 +815,7 @@ function getFilteredExpenses() {
 
 // ============ 렌더링 ============
 function renderAll() {
+    updateHeaderTeamSelect(); // 헤더 팀 드롭다운 업데이트
     renderMemberList();
     if (document.getElementById('memberTeam')) renderTeamSelect(); // 팀 목록 갱신
     updateMemberSelect();
@@ -681,8 +826,11 @@ function renderAll() {
 }
 
 function updateHeader() {
-    document.getElementById('teamTitle').textContent = state.config.teamName;
-    document.title = state.config.teamName;
+    // 현재 선택된 팀 이름으로 타이틀 업데이트
+    const currentTeam = state.teams.find(t => t.id === state.currentTeamId);
+    const teamName = currentTeam ? currentTeam.name : '팀 운영비 관리';
+    document.getElementById('teamTitle').textContent = teamName + ' 운영비';
+    document.title = teamName + ' 운영비 관리';
 }
 
 function renderDashboard() {
@@ -697,9 +845,12 @@ function renderBudgetOverview() {
     const quarterExpenses = getQuarterExpenses();
     const totalUsed = quarterExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
 
+    // 현재 팀의 분기 예산
+    const teamBudget = getCurrentTeamBudget();
+
     // 예산 계산 (전체 선택 시 연간 예산)
     const isYearly = state.currentQuarter === 'all';
-    const budget = isYearly ? state.config.quarterBudget * 4 : state.config.quarterBudget;
+    const budget = isYearly ? teamBudget * 4 : teamBudget;
     const remaining = budget - totalUsed;
 
     // 라벨 업데이트
@@ -722,7 +873,8 @@ function renderBudgetOverview() {
 function renderMonthlyBars() {
     const container = document.getElementById('monthlyBars');
     const months = QUARTER_MONTHS[state.currentQuarter];
-    const monthlyBudget = state.config.quarterBudget / 3;
+    const teamBudget = getCurrentTeamBudget();
+    const monthlyBudget = teamBudget / 3;
 
     // 현재 분기의 지출 데이터
     const quarterExpenses = getQuarterExpenses();
@@ -760,8 +912,9 @@ function renderMonthlyBars() {
 function renderQuarterSummary() {
     const quarterExpenses = getQuarterExpenses();
     const totalUsed = quarterExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
+    const teamBudget = getCurrentTeamBudget();
     const isYearly = state.currentQuarter === 'all';
-    const budget = isYearly ? state.config.quarterBudget * 4 : state.config.quarterBudget;
+    const budget = isYearly ? teamBudget * 4 : teamBudget;
     const percentage = budget > 0 ? Math.min((totalUsed / budget) * 100, 100) : 0;
     const circumference = 283; // 2 * PI * 45
     const offset = circumference - (percentage / 100) * circumference;
@@ -1029,60 +1182,102 @@ function importData(event) {
 // 엑셀 내보내기 (SheetJS 사용)
 function exportToExcel() {
     try {
-        // 데이터 가공
-        const data = state.expenses.map(expense => {
+        // XLSX 라이브러리 체크
+        if (typeof XLSX === 'undefined') {
+            showToast('엑셀 라이브러리를 불러오지 못했습니다. 페이지를 새로고침 해주세요.', 'error');
+            return;
+        }
+
+        // 워크북 생성
+        const wb = XLSX.utils.book_new();
+
+        // ========== 시트 1: 지출 내역 ==========
+        const expenseData = state.expenses.map(expense => {
             const member = state.members.find(m => m.id === expense.memberId);
             const team = member && member.teamId ? state.teams.find(t => t.id === member.teamId) : null;
 
             return {
                 '날짜': expense.date,
                 '팀명': team ? team.name : '-',
-                '이름': member ? member.name : '삭제된 멤버',
+                '이름': member ? member.name : '(삭제됨)',
                 '카테고리': expense.category,
                 '내용': expense.description,
-                '금액(KRW)': expense.amountKRW,
-                '금액(원본)': expense.amount,
+                '금액(원화)': expense.amountKRW,
+                '원본금액': expense.amount,
                 '통화': expense.currency,
-                '구독여부': expense.isSubscription ? 'Y' : 'N',
-                '결제확정': expense.isSubscription ? (expense.subscriptionMonth || '-') : '-'
+                '적용환율': expense.exchangeRateUsed || '-',
+                '구독': expense.isSubscription ? 'Y' : 'N'
             };
         });
 
-        if (data.length === 0) {
+        // 날짜순 정렬 (최신순)
+        expenseData.sort((a, b) => new Date(b['날짜']) - new Date(a['날짜']));
+
+        if (expenseData.length > 0) {
+            const wsExpenses = XLSX.utils.json_to_sheet(expenseData);
+            wsExpenses['!cols'] = [
+                { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 },
+                { wch: 30 }, { wch: 14 }, { wch: 12 }, { wch: 6 },
+                { wch: 10 }, { wch: 6 }
+            ];
+            XLSX.utils.book_append_sheet(wb, wsExpenses, "지출내역");
+        }
+
+        // ========== 시트 2: 팀원별 요약 ==========
+        const memberSummary = state.members.map(member => {
+            const team = member.teamId ? state.teams.find(t => t.id === member.teamId) : null;
+            const memberExpenses = state.expenses.filter(e => e.memberId === member.id);
+            const totalKRW = memberExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
+
+            // 카테고리별 집계
+            const categoryTotals = {};
+            memberExpenses.forEach(e => {
+                categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amountKRW;
+            });
+
+            return {
+                '팀명': team ? team.name : '-',
+                '이름': member.name,
+                '직책': member.role,
+                '총 사용금액': totalKRW,
+                '식비': categoryTotals['식비'] || 0,
+                '교통비': categoryTotals['교통비'] || 0,
+                '구독서비스': categoryTotals['구독서비스'] || 0,
+                '도서구입': categoryTotals['도서구입'] || 0,
+                '교육비': categoryTotals['교육비'] || 0,
+                '사무용품': categoryTotals['사무용품'] || 0,
+                '기타': categoryTotals['기타'] || 0,
+                '지출건수': memberExpenses.length
+            };
+        });
+
+        // 총 사용금액 기준 내림차순 정렬
+        memberSummary.sort((a, b) => b['총 사용금액'] - a['총 사용금액']);
+
+        if (memberSummary.length > 0) {
+            const wsMemberSummary = XLSX.utils.json_to_sheet(memberSummary);
+            wsMemberSummary['!cols'] = [
+                { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 14 },
+                { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+                { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }
+            ];
+            XLSX.utils.book_append_sheet(wb, wsMemberSummary, "팀원별요약");
+        }
+
+        // 시트가 하나도 없으면 안내
+        if (wb.SheetNames.length === 0) {
             showToast('내보낼 데이터가 없습니다.', 'warning');
             return;
         }
 
-        // 워크시트 생성
-        const ws = XLSX.utils.json_to_sheet(data);
-
-        // 컬럼 너비 설정
-        const wscols = [
-            { wch: 12 }, // 날짜
-            { wch: 15 }, // 팀명
-            { wch: 10 }, // 이름
-            { wch: 12 }, // 카테고리
-            { wch: 30 }, // 내용
-            { wch: 12 }, // 금액(KRW)
-            { wch: 10 }, // 금액(원본)
-            { wch: 6 },  // 통화
-            { wch: 8 },  // 구독여부
-            { wch: 10 }  // 결제확정
-        ];
-        ws['!cols'] = wscols;
-
-        // 워크북 생성
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "지출내역");
-
         // 파일 저장
         const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        XLSX.writeFile(wb, `팀운영비_지출내역_${today}.xlsx`);
+        XLSX.writeFile(wb, `팀운영비_${state.config.teamName}_${today}.xlsx`);
 
         showToast('엑셀 파일이 다운로드되었습니다.', 'success');
     } catch (error) {
         console.error('Excel export failed:', error);
-        showToast('엑셀 내보내기에 실패했습니다.', 'error');
+        showToast('엑셀 내보내기에 실패했습니다: ' + error.message, 'error');
     }
 }
 
@@ -1109,8 +1304,16 @@ window.deleteMember = deleteMember;
 window.deleteExpense = deleteExpense;
 window.deleteSubscription = deleteSubscription;
 window.convertToSubscription = convertToSubscription;
+window.confirmSubscription = confirmSubscription;
 window.changeQuarter = changeQuarter;
+window.changeTeam = changeTeam;
 window.fetchExchangeRate = fetchExchangeRate;
 window.exportData = exportData;
 window.importData = importData;
 window.exportToExcel = exportToExcel;
+window.openSettingsModal = openSettingsModal;
+window.closeSettingsModal = closeSettingsModal;
+window.openTeamModal = openTeamModal;
+window.closeTeamModal = closeTeamModal;
+window.deleteTeam = deleteTeam;
+window.toggleTeamDropdown = toggleTeamDropdown;
