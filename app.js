@@ -16,6 +16,7 @@ let state = {
     members: [],
     expenses: [],
     subscriptions: [], // 월 정기 구독 목록
+    teams: [], // 팀 목록
     exchangeRate: 1450, // 기본 환율 (실시간으로 업데이트됨)
     currentQuarter: 1, // 현재 선택된 분기
     // 설정 (기본값)
@@ -47,6 +48,7 @@ function loadFromStorage() {
         state.members = data.members || [];
         state.expenses = data.expenses || [];
         state.subscriptions = data.subscriptions || [];
+        state.teams = data.teams || []; // 팀 데이터 로드
         // 설정 로드 (기존 데이터에 없으면 기본값 유지)
         if (data.config) {
             state.config = { ...state.config, ...data.config };
@@ -83,6 +85,7 @@ function saveToStorage() {
         members: state.members,
         expenses: state.expenses,
         subscriptions: state.subscriptions,
+        teams: state.teams,
         config: state.config
     }));
 }
@@ -258,6 +261,81 @@ function handleSettingsSubmit(e) {
     showToast('설정이 저장되었습니다.', 'success');
 }
 
+// 팀 관리 로직
+function openTeamModal() {
+    document.getElementById('teamModal').style.display = 'block';
+    renderTeamList();
+    document.getElementById('newTeamName').focus();
+}
+
+function closeTeamModal() {
+    document.getElementById('teamModal').style.display = 'none';
+}
+
+function handleTeamSubmit(e) {
+    e.preventDefault();
+    const nameInput = document.getElementById('newTeamName');
+    const name = nameInput.value.trim();
+
+    if (name) {
+        if (state.teams.some(t => t.name === name)) {
+            showToast('이미 존재하는 팀 이름입니다.', 'error');
+            return;
+        }
+
+        state.teams.push({
+            id: Date.now(),
+            name: name
+        });
+        saveToStorage();
+        renderTeamList();
+        renderTeamSelect(); // 멤버 폼의 Select 업데이트
+        nameInput.value = '';
+        showToast('팀이 추가되었습니다.', 'success');
+    }
+}
+
+function deleteTeam(id) {
+    if (confirm('팀을 삭제하시겠습니까?\n해당 팀에 소속된 멤버는 "미지정" 상태가 됩니다.')) {
+        state.teams = state.teams.filter(t => t.id !== id);
+        // 멤버들의 teamId 제거
+        state.members.forEach(m => {
+            if (m.teamId === id) {
+                m.teamId = null;
+            }
+        });
+        saveToStorage();
+        renderTeamList();
+        renderTeamSelect();
+        renderMembers(); // 멤버 목록 갱신 (팀 이름 표시 제거)
+        showToast('팀이 삭제되었습니다.', 'success');
+    }
+}
+
+function renderTeamList() {
+    const list = document.getElementById('teamList');
+    list.innerHTML = state.teams.map(team => `
+        <div class="setting-item">
+            <span>${team.name}</span>
+            <button class="btn btn-danger btn-sm" onclick="deleteTeam(${team.id})">삭제</button>
+        </div>
+    `).join('') || '<p class="empty-state">등록된 팀이 없습니다.</p>';
+}
+
+function renderTeamSelect() {
+    const select = document.getElementById('memberTeam');
+    if (!select) return; // 요소가 없는 경우 방어
+
+    const currentVal = select.value;
+    select.innerHTML = '<option value="">팀 선택 (미지정)</option>' +
+        state.teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+
+    // 가능한 경우 값 유지
+    if (currentVal && state.teams.some(t => t.id == currentVal)) {
+        select.value = currentVal;
+    }
+}
+
 // 구독 옵션 표시/숨김
 function toggleSubscriptionOption() {
     const category = document.getElementById('expenseCategory').value;
@@ -284,16 +362,20 @@ function handleMemberSubmit(e) {
 
     const name = document.getElementById('memberName').value.trim();
     const role = document.getElementById('memberRole').value.trim();
+    const teamSelect = document.getElementById('memberTeam'); // 팀 선택
 
     if (!name) {
         showToast('이름을 입력해주세요.', 'error');
         return;
     }
 
+    const teamId = teamSelect.value ? Number(teamSelect.value) : null;
+
     const member = {
         id: Date.now(),
         name,
-        role: role || '팀원'
+        role: role || '팀원',
+        teamId: teamId
     };
 
     state.members.push(member);
@@ -332,13 +414,20 @@ function renderMemberList() {
         const memberExpenses = state.expenses.filter(e => e.memberId === member.id);
         const totalUsed = memberExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
 
+        const team = state.teams.find(t => t.id === member.teamId);
+        const teamBadge = team ? `<span class="team-badge">${team.name}</span>` : '';
+
         return `
             <div class="member-card">
                 <div class="info">
                     <div class="avatar">${initial}</div>
                     <div class="details">
                         <div class="name">${member.name}</div>
-                        <div class="role">${member.role} · 사용: ₩${totalUsed.toLocaleString('ko-KR')}</div>
+                        <div class="member-meta">
+                            ${teamBadge}
+                            <span class="role">${member.role}</span>
+                            <span>· 사용: ₩${totalUsed.toLocaleString('ko-KR')}</span>
+                        </div>
                     </div>
                 </div>
                 <div class="actions">
@@ -583,6 +672,7 @@ function getFilteredExpenses() {
 // ============ 렌더링 ============
 function renderAll() {
     renderMemberList();
+    if (document.getElementById('memberTeam')) renderTeamSelect(); // 팀 목록 갱신
     updateMemberSelect();
     updateFilterMonths();
     renderDashboard();
@@ -913,6 +1003,7 @@ function importData(event) {
             state.members = data.members;
             state.expenses = data.expenses;
             state.subscriptions = data.subscriptions || [];
+            state.teams = data.teams || []; // 팀 데이터 로드
             if (data.config) {
                 state.config = data.config;
             }
@@ -933,6 +1024,66 @@ function importData(event) {
     };
 
     reader.readAsText(file);
+}
+
+// 엑셀 내보내기 (SheetJS 사용)
+function exportToExcel() {
+    try {
+        // 데이터 가공
+        const data = state.expenses.map(expense => {
+            const member = state.members.find(m => m.id === expense.memberId);
+            const team = member && member.teamId ? state.teams.find(t => t.id === member.teamId) : null;
+
+            return {
+                '날짜': expense.date,
+                '팀명': team ? team.name : '-',
+                '이름': member ? member.name : '삭제된 멤버',
+                '카테고리': expense.category,
+                '내용': expense.description,
+                '금액(KRW)': expense.amountKRW,
+                '금액(원본)': expense.amount,
+                '통화': expense.currency,
+                '구독여부': expense.isSubscription ? 'Y' : 'N',
+                '결제확정': expense.isSubscription ? (expense.subscriptionMonth || '-') : '-'
+            };
+        });
+
+        if (data.length === 0) {
+            showToast('내보낼 데이터가 없습니다.', 'warning');
+            return;
+        }
+
+        // 워크시트 생성
+        const ws = XLSX.utils.json_to_sheet(data);
+
+        // 컬럼 너비 설정
+        const wscols = [
+            { wch: 12 }, // 날짜
+            { wch: 15 }, // 팀명
+            { wch: 10 }, // 이름
+            { wch: 12 }, // 카테고리
+            { wch: 30 }, // 내용
+            { wch: 12 }, // 금액(KRW)
+            { wch: 10 }, // 금액(원본)
+            { wch: 6 },  // 통화
+            { wch: 8 },  // 구독여부
+            { wch: 10 }  // 결제확정
+        ];
+        ws['!cols'] = wscols;
+
+        // 워크북 생성
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "지출내역");
+
+        // 파일 저장
+        const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        XLSX.writeFile(wb, `팀운영비_지출내역_${today}.xlsx`);
+
+        showToast('엑셀 파일이 다운로드되었습니다.', 'success');
+    } catch (error) {
+        console.error('Excel export failed:', error);
+        showToast('엑셀 내보내기에 실패했습니다.', 'error');
+    }
 }
 
 // ============ 유틸리티 ============
@@ -962,3 +1113,4 @@ window.changeQuarter = changeQuarter;
 window.fetchExchangeRate = fetchExchangeRate;
 window.exportData = exportData;
 window.importData = importData;
+window.exportToExcel = exportToExcel;
