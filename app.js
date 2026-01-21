@@ -21,7 +21,7 @@ let state = {
     // 설정 (기본값)
     config: {
         teamName: '팀 운영비 관리',
-        quarterBudget: 435000
+        quarterBudget: 0
     }
 };
 
