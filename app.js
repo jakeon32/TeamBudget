@@ -1,0 +1,883 @@
+// 팀 운영비 관리 시스템
+
+// 분기별 월 정보
+const QUARTER_MONTHS = {
+    1: [1, 2, 3],
+    2: [4, 5, 6],
+    3: [7, 8, 9],
+    4: [10, 11, 12],
+    all: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+};
+
+const MONTH_NAMES = ['', '1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
+
+// 상태 관리
+let state = {
+    members: [],
+    expenses: [],
+    subscriptions: [], // 월 정기 구독 목록
+    exchangeRate: 1450, // 기본 환율 (실시간으로 업데이트됨)
+    currentQuarter: 1, // 현재 선택된 분기
+    // 설정 (기본값)
+    config: {
+        teamName: '팀 운영비 관리',
+        quarterBudget: 435000
+    }
+};
+
+// 로컬 스토리지 키
+const STORAGE_KEY = 'teamBudgetData';
+
+// ============ 초기화 ============
+document.addEventListener('DOMContentLoaded', () => {
+    loadFromStorage();
+    initTabs();
+    initForms();
+    initFilters();
+    fetchExchangeRate();
+    setDefaultDate();
+    renderAll();
+});
+
+// 로컬 스토리지에서 데이터 로드
+function loadFromStorage() {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+        const data = JSON.parse(saved);
+        state.members = data.members || [];
+        state.expenses = data.expenses || [];
+        state.subscriptions = data.subscriptions || [];
+        // 설정 로드 (기존 데이터에 없으면 기본값 유지)
+        if (data.config) {
+            state.config = { ...state.config, ...data.config };
+        }
+
+        // 기존 데이터 마이그레이션: isSubscription 필드가 없는 경우 추가
+        let needsSave = false;
+        state.expenses = state.expenses.map(expense => {
+            if (expense.isSubscription === undefined) {
+                needsSave = true;
+                return {
+                    ...expense,
+                    isSubscription: false,
+                    subscriptionGroupId: null
+                };
+            }
+            return expense;
+        });
+
+        if (needsSave) {
+            saveToStorage();
+        }
+    }
+
+    // 현재 월에 맞는 분기 자동 선택
+    const currentMonth = new Date().getMonth() + 1;
+    state.currentQuarter = Math.ceil(currentMonth / 3);
+    document.getElementById('quarterSelect').value = state.currentQuarter;
+}
+
+// 로컬 스토리지에 데이터 저장
+function saveToStorage() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        members: state.members,
+        expenses: state.expenses,
+        subscriptions: state.subscriptions,
+        config: state.config
+    }));
+}
+
+// 분기 변경
+function changeQuarter() {
+    const select = document.getElementById('quarterSelect');
+    state.currentQuarter = select.value === 'all' ? 'all' : parseInt(select.value);
+    updateFilterMonths();
+    renderAll();
+}
+
+// 필터 월 옵션 업데이트
+function updateFilterMonths() {
+    const filterMonth = document.getElementById('filterMonth');
+    const months = QUARTER_MONTHS[state.currentQuarter];
+
+    filterMonth.innerHTML = '<option value="all">전체 월</option>';
+    months.forEach(month => {
+        const option = document.createElement('option');
+        option.value = month;
+        option.textContent = MONTH_NAMES[month];
+        filterMonth.appendChild(option);
+    });
+}
+
+// 현재 분기의 지출 + 구독 계산 데이터 가져오기
+function getQuarterExpenses() {
+    const months = QUARTER_MONTHS[state.currentQuarter];
+    const year = new Date().getFullYear();
+
+    // 일반 지출 필터링
+    const regularExpenses = state.expenses.filter(expense => {
+        const expenseMonth = new Date(expense.date).getMonth() + 1;
+        const expenseYear = new Date(expense.date).getFullYear();
+        return expenseYear === year && months.includes(expenseMonth);
+    });
+
+    // 구독 서비스: 각 월마다 가상의 지출로 계산
+    const subscriptionExpenses = [];
+    state.subscriptions.forEach(sub => {
+        months.forEach(month => {
+            subscriptionExpenses.push({
+                ...sub,
+                id: `${sub.id}-${month}`,
+                date: `${year}-${String(month).padStart(2, '0')}-01`,
+                isVirtual: true // 가상 지출 표시
+            });
+        });
+    });
+
+    return [...regularExpenses, ...subscriptionExpenses];
+}
+
+// ============ 환율 API ============
+async function fetchExchangeRate() {
+    const rateElement = document.getElementById('exchangeRate');
+    rateElement.textContent = '로딩중...';
+
+    try {
+        // 무료 환율 API 사용 (exchangerate-api.com)
+        const response = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+        const data = await response.json();
+        state.exchangeRate = data.rates.KRW;
+        rateElement.textContent = `₩${state.exchangeRate.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}`;
+        showToast('환율이 업데이트되었습니다.', 'success');
+    } catch (error) {
+        console.error('환율 조회 실패:', error);
+        rateElement.textContent = `₩${state.exchangeRate.toLocaleString('ko-KR')} (기본값)`;
+        showToast('환율 조회에 실패했습니다. 기본값을 사용합니다.', 'error');
+    }
+}
+
+// ============ 탭 관리 ============
+function initTabs() {
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            // 탭 활성화
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            // 컨텐츠 표시
+            const tabId = tab.dataset.tab;
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(tabId).classList.add('active');
+        });
+    });
+}
+
+// ============ 폼 초기화 ============
+function initForms() {
+    // 팀원 등록 폼
+    document.getElementById('memberForm').addEventListener('submit', handleMemberSubmit);
+
+    // 비용 등록 폼
+    document.getElementById('expenseForm').addEventListener('submit', handleExpenseSubmit);
+
+    // 설정 폼
+    document.getElementById('settingsForm').addEventListener('submit', handleSettingsSubmit);
+
+    // 통화 선택 변경 시 환산 금액 표시
+    document.getElementById('expenseCurrency').addEventListener('change', updateConvertedAmount);
+    document.getElementById('expenseAmount').addEventListener('input', updateConvertedAmount);
+
+    // 카테고리 변경 시 구독 옵션 표시/숨김
+    document.getElementById('expenseCategory').addEventListener('change', toggleSubscriptionOption);
+}
+
+// ============ 설정 관리 ============
+function openSettingsModal() {
+    document.getElementById('settingTeamName').value = state.config.teamName;
+    document.getElementById('settingBudget').value = state.config.quarterBudget;
+    document.getElementById('settingsModal').classList.add('active');
+}
+
+function closeSettingsModal() {
+    document.getElementById('settingsModal').classList.remove('active');
+}
+
+function handleSettingsSubmit(e) {
+    e.preventDefault();
+
+    const teamName = document.getElementById('settingTeamName').value.trim();
+    const budget = parseInt(document.getElementById('settingBudget').value);
+
+    if (!teamName || isNaN(budget) || budget < 0) {
+        showToast('유효한 값을 입력해주세요.', 'error');
+        return;
+    }
+
+    state.config.teamName = teamName;
+    state.config.quarterBudget = budget;
+
+    saveToStorage();
+    renderAll();
+    closeSettingsModal();
+    showToast('설정이 저장되었습니다.', 'success');
+}
+
+// 구독 옵션 표시/숨김
+function toggleSubscriptionOption() {
+    const category = document.getElementById('expenseCategory').value;
+    const subscriptionOption = document.getElementById('subscriptionOption');
+    const isSubscriptionCheckbox = document.getElementById('isSubscription');
+
+    if (category === '구독서비스') {
+        subscriptionOption.style.display = 'block';
+    } else {
+        subscriptionOption.style.display = 'none';
+        isSubscriptionCheckbox.checked = false;
+    }
+}
+
+// 기본 날짜 설정
+function setDefaultDate() {
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('expenseDate').value = today;
+}
+
+// ============ 팀원 관리 ============
+function handleMemberSubmit(e) {
+    e.preventDefault();
+
+    const name = document.getElementById('memberName').value.trim();
+    const role = document.getElementById('memberRole').value.trim();
+
+    if (!name) {
+        showToast('이름을 입력해주세요.', 'error');
+        return;
+    }
+
+    const member = {
+        id: Date.now(),
+        name,
+        role: role || '팀원'
+    };
+
+    state.members.push(member);
+    saveToStorage();
+
+    // 폼 초기화
+    document.getElementById('memberForm').reset();
+
+    renderAll();
+    showToast(`${name}님이 팀원으로 등록되었습니다.`, 'success');
+}
+
+function deleteMember(id) {
+    const member = state.members.find(m => m.id === id);
+    if (!member) return;
+
+    if (confirm(`${member.name}님을 삭제하시겠습니까?\n해당 팀원의 지출 내역도 함께 삭제됩니다.`)) {
+        state.members = state.members.filter(m => m.id !== id);
+        state.expenses = state.expenses.filter(e => e.memberId !== id);
+        saveToStorage();
+        renderAll();
+        showToast('팀원이 삭제되었습니다.', 'success');
+    }
+}
+
+function renderMemberList() {
+    const container = document.getElementById('memberList');
+
+    if (state.members.length === 0) {
+        container.innerHTML = '<p class="empty-state">등록된 팀원이 없습니다.</p>';
+        return;
+    }
+
+    container.innerHTML = state.members.map(member => {
+        const initial = member.name.charAt(0);
+        const memberExpenses = state.expenses.filter(e => e.memberId === member.id);
+        const totalUsed = memberExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
+
+        return `
+            <div class="member-card">
+                <div class="info">
+                    <div class="avatar">${initial}</div>
+                    <div class="details">
+                        <div class="name">${member.name}</div>
+                        <div class="role">${member.role} · 사용: ₩${totalUsed.toLocaleString('ko-KR')}</div>
+                    </div>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-danger btn-sm" onclick="deleteMember(${member.id})">삭제</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateMemberSelect() {
+    const selects = [
+        document.getElementById('expenseMember'),
+        document.getElementById('filterMember')
+    ];
+
+    selects.forEach(select => {
+        const currentValue = select.value;
+        const isFilter = select.id === 'filterMember';
+
+        select.innerHTML = isFilter
+            ? '<option value="all">전체 팀원</option>'
+            : '<option value="">팀원 선택</option>';
+
+        state.members.forEach(member => {
+            const option = document.createElement('option');
+            option.value = member.id;
+            option.textContent = member.name;
+            select.appendChild(option);
+        });
+
+        // 이전 선택값 복원
+        if (currentValue && [...select.options].some(o => o.value === currentValue)) {
+            select.value = currentValue;
+        }
+    });
+}
+
+// ============ 비용 관리 ============
+function handleExpenseSubmit(e) {
+    e.preventDefault();
+
+    const memberId = parseInt(document.getElementById('expenseMember').value);
+    const date = document.getElementById('expenseDate').value;
+    const category = document.getElementById('expenseCategory').value;
+    const description = document.getElementById('expenseDescription').value.trim();
+    const currency = document.getElementById('expenseCurrency').value;
+    const amount = parseFloat(document.getElementById('expenseAmount').value);
+    const isSubscription = document.getElementById('isSubscription').checked;
+
+    if (!memberId || !date || !category || !description || !amount) {
+        showToast('모든 필드를 입력해주세요.', 'error');
+        return;
+    }
+
+    const amountKRW = currency === 'USD'
+        ? Math.round(amount * state.exchangeRate)
+        : amount;
+
+    // 구독 서비스인 경우 subscriptions 배열에 추가 (매월 자동 반영)
+    if (category === '구독서비스' && isSubscription) {
+        const subscription = {
+            id: Date.now(),
+            memberId,
+            category,
+            description,
+            currency,
+            amount,
+            amountKRW,
+            exchangeRateUsed: currency === 'USD' ? state.exchangeRate : null,
+            isSubscription: true,
+            createdAt: date
+        };
+        state.subscriptions.push(subscription);
+        showToast(`월 정기 구독이 등록되었습니다. (매월 ${currency === 'USD' ? '$' + amount : '₩' + amountKRW.toLocaleString('ko-KR')})`, 'success');
+    } else {
+        const expense = {
+            id: Date.now(),
+            memberId,
+            date,
+            category,
+            description,
+            currency,
+            amount,
+            amountKRW,
+            exchangeRateUsed: currency === 'USD' ? state.exchangeRate : null,
+            isSubscription: false
+        };
+        state.expenses.push(expense);
+        showToast('비용이 등록되었습니다.', 'success');
+    }
+
+    saveToStorage();
+
+    // 폼 초기화 (날짜와 팀원은 유지)
+    document.getElementById('expenseCategory').value = '';
+    document.getElementById('expenseDescription').value = '';
+    document.getElementById('expenseAmount').value = '';
+    document.getElementById('expenseCurrency').value = 'KRW';
+    document.getElementById('convertedAmount').style.display = 'none';
+    document.getElementById('subscriptionOption').style.display = 'none';
+    document.getElementById('isSubscription').checked = false;
+
+    renderAll();
+}
+
+function updateConvertedAmount() {
+    const currency = document.getElementById('expenseCurrency').value;
+    const amount = parseFloat(document.getElementById('expenseAmount').value) || 0;
+    const convertedDiv = document.getElementById('convertedAmount');
+    const convertedValue = document.getElementById('convertedValue');
+
+    if (currency === 'USD' && amount > 0) {
+        const krwAmount = Math.round(amount * state.exchangeRate);
+        convertedValue.textContent = `₩${krwAmount.toLocaleString('ko-KR')}`;
+        convertedDiv.style.display = 'flex';
+    } else {
+        convertedDiv.style.display = 'none';
+    }
+}
+
+// 기존 구독 항목을 월 정기 구독으로 전환
+function convertToSubscription(id) {
+    const expense = state.expenses.find(e => e.id === id);
+    if (!expense) return;
+
+    if (!confirm(`"${expense.description}"을(를) 월 정기 구독으로 전환하시겠습니까?\n매월 자동으로 비용이 반영됩니다.`)) {
+        return;
+    }
+
+    // 구독으로 추가
+    const subscription = {
+        id: Date.now(),
+        memberId: expense.memberId,
+        category: expense.category,
+        description: expense.description,
+        currency: expense.currency,
+        amount: expense.amount,
+        amountKRW: expense.amountKRW,
+        exchangeRateUsed: expense.exchangeRateUsed,
+        isSubscription: true,
+        createdAt: expense.date
+    };
+    state.subscriptions.push(subscription);
+
+    // 기존 일반 지출 삭제
+    state.expenses = state.expenses.filter(e => e.id !== id);
+
+    saveToStorage();
+    renderAll();
+    showToast(`"${expense.description}"이(가) 월 정기 구독으로 전환되었습니다.`, 'success');
+}
+
+// 구독 삭제
+function deleteSubscription(id) {
+    const subscription = state.subscriptions.find(s => s.id === id);
+    if (!subscription) return;
+
+    if (confirm(`"${subscription.description}" 월 정기 구독을 삭제하시겠습니까?`)) {
+        state.subscriptions = state.subscriptions.filter(s => s.id !== id);
+        saveToStorage();
+        renderAll();
+        showToast('월 정기 구독이 삭제되었습니다.', 'success');
+    }
+}
+
+function deleteExpense(id) {
+    const expense = state.expenses.find(e => e.id === id);
+    if (!expense) return;
+
+    if (confirm('이 지출 내역을 삭제하시겠습니까?')) {
+        state.expenses = state.expenses.filter(e => e.id !== id);
+        saveToStorage();
+        renderAll();
+        showToast('지출 내역이 삭제되었습니다.', 'success');
+    }
+}
+
+// ============ 필터 ============
+function initFilters() {
+    document.getElementById('filterMonth').addEventListener('change', renderExpenseTable);
+    document.getElementById('filterMember').addEventListener('change', renderExpenseTable);
+    document.getElementById('filterCategory').addEventListener('change', renderExpenseTable);
+}
+
+function getFilteredExpenses() {
+    const monthFilter = document.getElementById('filterMonth').value;
+    const memberFilter = document.getElementById('filterMember').value;
+    const categoryFilter = document.getElementById('filterCategory').value;
+
+    // 현재 분기의 지출 + 구독 데이터 가져오기
+    const allExpenses = getQuarterExpenses();
+
+    return allExpenses.filter(expense => {
+        const expenseMonth = new Date(expense.date).getMonth() + 1;
+
+        if (monthFilter !== 'all' && expenseMonth !== parseInt(monthFilter)) return false;
+        if (memberFilter !== 'all' && expense.memberId !== parseInt(memberFilter)) return false;
+        if (categoryFilter !== 'all' && expense.category !== categoryFilter) return false;
+
+        return true;
+    });
+}
+
+// ============ 렌더링 ============
+function renderAll() {
+    renderMemberList();
+    updateMemberSelect();
+    updateFilterMonths();
+    renderDashboard();
+    renderExpenseTable();
+    updateHeader();
+}
+
+function updateHeader() {
+    document.getElementById('teamTitle').textContent = state.config.teamName;
+    document.title = state.config.teamName;
+}
+
+function renderDashboard() {
+    renderBudgetOverview();
+    renderMonthlyBars();
+    renderQuarterSummary();
+    renderMemberUsage();
+    renderRecentExpenses();
+}
+
+function renderBudgetOverview() {
+    const quarterExpenses = getQuarterExpenses();
+    const totalUsed = quarterExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
+
+    // 예산 계산 (전체 선택 시 연간 예산)
+    const isYearly = state.currentQuarter === 'all';
+    const budget = isYearly ? state.config.quarterBudget * 4 : state.config.quarterBudget;
+    const remaining = budget - totalUsed;
+
+    // 라벨 업데이트
+    document.getElementById('budgetLabel').textContent = isYearly ? '연간 예산' : '분기 예산';
+    document.getElementById('budgetAmount').textContent = `₩${budget.toLocaleString('ko-KR')}`;
+    document.getElementById('totalUsed').textContent = `₩${totalUsed.toLocaleString('ko-KR')}`;
+    document.getElementById('totalRemaining').textContent = `₩${remaining.toLocaleString('ko-KR')}`;
+
+    // 잔여 금액 색상 변경
+    const remainingEl = document.getElementById('totalRemaining');
+    if (remaining < 0) {
+        remainingEl.style.color = '#f87171';
+    } else if (remaining < budget * 0.2) {
+        remainingEl.style.color = '#fbbf24';
+    } else {
+        remainingEl.style.color = '#34d399';
+    }
+}
+
+function renderMonthlyBars() {
+    const container = document.getElementById('monthlyBars');
+    const months = QUARTER_MONTHS[state.currentQuarter];
+    const monthlyBudget = state.config.quarterBudget / 3;
+
+    // 현재 분기의 지출 데이터
+    const quarterExpenses = getQuarterExpenses();
+
+    // 월별 사용량 계산
+    const monthlyUsage = {};
+    months.forEach(m => monthlyUsage[m] = 0);
+
+    quarterExpenses.forEach(expense => {
+        const month = new Date(expense.date).getMonth() + 1;
+        if (months.includes(month)) {
+            monthlyUsage[month] += expense.amountKRW;
+        }
+    });
+
+    const usageValues = Object.values(monthlyUsage);
+    const maxUsage = Math.max(...usageValues, monthlyBudget);
+
+    container.innerHTML = months.map(month => {
+        const usage = monthlyUsage[month];
+        const percentage = (usage / maxUsage) * 100;
+
+        return `
+            <div class="month-bar">
+                <div class="bar-container">
+                    <div class="bar-fill" style="height: ${percentage}%"></div>
+                </div>
+                <span class="bar-label">${MONTH_NAMES[month]}</span>
+                <span class="bar-value">₩${(usage / 1000).toFixed(0)}K</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderQuarterSummary() {
+    const quarterExpenses = getQuarterExpenses();
+    const totalUsed = quarterExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
+    const isYearly = state.currentQuarter === 'all';
+    const budget = isYearly ? state.config.quarterBudget * 4 : state.config.quarterBudget;
+    const percentage = budget > 0 ? Math.min((totalUsed / budget) * 100, 100) : 0;
+    const circumference = 283; // 2 * PI * 45
+    const offset = circumference - (percentage / 100) * circumference;
+
+    document.getElementById('progressCircle').style.strokeDashoffset = offset;
+    document.getElementById('usagePercent').textContent = `${percentage.toFixed(1)}%`;
+
+    // 색상 변경
+    const progressCircle = document.getElementById('progressCircle');
+    if (percentage >= 100) {
+        progressCircle.style.stroke = '#ef4444';
+    } else if (percentage >= 80) {
+        progressCircle.style.stroke = '#f59e0b';
+    } else {
+        progressCircle.style.stroke = '#6366f1';
+    }
+}
+
+function renderMemberUsage() {
+    const container = document.getElementById('memberUsage');
+
+    if (state.members.length === 0) {
+        container.innerHTML = '<p class="empty-state">등록된 팀원이 없습니다.</p>';
+        return;
+    }
+
+    const quarterExpenses = getQuarterExpenses();
+    const memberUsages = state.members.map(member => {
+        const totalUsed = quarterExpenses
+            .filter(e => e.memberId === member.id)
+            .reduce((sum, e) => sum + e.amountKRW, 0);
+        return { ...member, totalUsed };
+    }).sort((a, b) => b.totalUsed - a.totalUsed);
+
+    const maxUsage = Math.max(...memberUsages.map(m => m.totalUsed), 1);
+
+    container.innerHTML = memberUsages.map(member => {
+        const percentage = (member.totalUsed / maxUsage) * 100;
+        return `
+            <div class="member-usage-item">
+                <div class="member-info">
+                    <span class="name">${member.name}</span>
+                    <span class="amount">₩${member.totalUsed.toLocaleString('ko-KR')}</span>
+                </div>
+                <div class="usage-bar">
+                    <div class="usage-fill" style="width: ${percentage}%"></div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderRecentExpenses() {
+    const container = document.getElementById('recentExpenses');
+    const quarterExpenses = getQuarterExpenses();
+
+    if (quarterExpenses.length === 0 && state.subscriptions.length === 0) {
+        container.innerHTML = '<p class="empty-state">등록된 지출이 없습니다.</p>';
+        return;
+    }
+
+    // 최근 지출 (구독 포함)
+    const recentExpenses = [...quarterExpenses]
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 5);
+
+    let html = recentExpenses.map(expense => {
+        const member = state.members.find(m => m.id === expense.memberId);
+        const memberName = member ? member.name : '알 수 없음';
+        const subscriptionBadge = expense.isSubscription ? '<span class="subscription-badge">월정기</span>' : '';
+
+        return `
+            <div class="expense-item">
+                <div class="info">
+                    <span class="category-badge">${expense.category}</span>
+                    <div>
+                        <div class="description">${expense.description}${subscriptionBadge}</div>
+                        <div class="member">${memberName} · ${expense.date}</div>
+                    </div>
+                </div>
+                <div class="amount">₩${expense.amountKRW.toLocaleString('ko-KR')}</div>
+            </div>
+        `;
+    }).join('');
+
+    // 월 정기 구독 목록 표시
+    if (state.subscriptions.length > 0) {
+        html += `<div class="subscriptions-section"><h3>월 정기 구독 목록</h3>`;
+        html += state.subscriptions.map(sub => {
+            const member = state.members.find(m => m.id === sub.memberId);
+            const memberName = member ? member.name : '알 수 없음';
+            return `
+                <div class="expense-item subscription-item">
+                    <div class="info">
+                        <span class="category-badge">${sub.category}</span>
+                        <div>
+                            <div class="description">${sub.description}<span class="subscription-badge">월정기</span></div>
+                            <div class="member">${memberName} · 매월 반복</div>
+                        </div>
+                    </div>
+                    <div class="amount-actions">
+                        <span class="amount">₩${sub.amountKRW.toLocaleString('ko-KR')}/월</span>
+                        <button class="btn btn-danger btn-sm" onclick="deleteSubscription(${sub.id})">삭제</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        html += `</div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderExpenseTable() {
+    const tbody = document.getElementById('expenseTableBody');
+    const filteredExpenses = getFilteredExpenses();
+
+    if (filteredExpenses.length === 0) {
+        tbody.innerHTML = `
+            <tr class="empty-row">
+                <td colspan="6">조건에 맞는 지출 내역이 없습니다.</td>
+            </tr>
+        `;
+        document.getElementById('filteredTotal').textContent = '₩0';
+        return;
+    }
+
+    // 날짜순 정렬 (최신순)
+    const sortedExpenses = [...filteredExpenses].sort((a, b) =>
+        new Date(b.date) - new Date(a.date)
+    );
+
+    tbody.innerHTML = sortedExpenses.map(expense => {
+        const member = state.members.find(m => m.id === expense.memberId);
+        const memberName = member ? member.name : '알 수 없음';
+
+        const amountDisplay = expense.currency === 'USD'
+            ? `$${expense.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span class="currency-tag">USD</span><br><small style="color: var(--text-light)">₩${expense.amountKRW.toLocaleString('ko-KR')}</small>`
+            : `₩${expense.amountKRW.toLocaleString('ko-KR')}`;
+
+        const subscriptionBadge = expense.isSubscription ? '<span class="subscription-badge">월정기</span>' : '';
+
+        // 구독 서비스인데 아직 월정기가 아닌 경우 전환 버튼 표시
+        const canConvert = expense.category === '구독서비스' && !expense.isSubscription && !expense.isVirtual;
+        const convertButton = canConvert
+            ? `<button class="btn btn-secondary btn-sm" onclick="convertToSubscription(${expense.id})">월정기</button>`
+            : '';
+
+        // 가상 지출(구독에서 생성)은 삭제 버튼 대신 구독 관리로 안내
+        const deleteButton = expense.isVirtual
+            ? ''
+            : `<button class="btn btn-danger btn-sm" onclick="deleteExpense(${expense.id})">삭제</button>`;
+
+        return `
+            <tr>
+                <td>${expense.date}</td>
+                <td>${memberName}</td>
+                <td>${expense.category}${subscriptionBadge}</td>
+                <td>${expense.description}</td>
+                <td>${amountDisplay}</td>
+                <td>
+                    ${convertButton}
+                    ${deleteButton}
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    // 필터 결과 합계
+    const filteredTotal = filteredExpenses.reduce((sum, e) => sum + e.amountKRW, 0);
+    document.getElementById('filteredTotal').textContent = `₩${filteredTotal.toLocaleString('ko-KR')}`;
+}
+
+// ============ 데이터 내보내기/가져오기 ============
+function exportData() {
+    const data = {
+        version: '1.0',
+        exportDate: new Date().toISOString(),
+        members: state.members,
+        expenses: state.expenses,
+        config: state.config
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `팀운영비_백업_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showToast('데이터가 내보내기 되었습니다.', 'success');
+}
+
+function importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+
+            // 데이터 유효성 검사
+            if (!data.members || !data.expenses) {
+                throw new Error('유효하지 않은 데이터 형식입니다.');
+            }
+
+            // 기존 데이터와 병합할지 대체할지 확인
+            const hasExistingData = state.members.length > 0 || state.expenses.length > 0;
+
+            if (hasExistingData) {
+                const choice = confirm(
+                    '기존 데이터가 있습니다.\n\n' +
+                    '확인: 기존 데이터를 덮어씁니다.\n' +
+                    '취소: 가져오기를 중단합니다.'
+                );
+
+                if (!choice) {
+                    event.target.value = '';
+                    return;
+                }
+            }
+
+            // 데이터 적용
+            state.members = data.members;
+            state.expenses = data.expenses;
+            state.subscriptions = data.subscriptions || [];
+            if (data.config) {
+                state.config = data.config;
+            }
+            saveToStorage();
+            renderAll();
+
+            const memberCount = data.members.length;
+            const expenseCount = data.expenses.length;
+            const subCount = state.subscriptions.length;
+            showToast(`데이터를 가져왔습니다. (팀원 ${memberCount}명, 지출 ${expenseCount}건, 구독 ${subCount}건)`, 'success');
+        } catch (error) {
+            console.error('데이터 가져오기 실패:', error);
+            showToast('데이터 가져오기에 실패했습니다. 파일 형식을 확인해주세요.', 'error');
+        }
+
+        // 파일 입력 초기화
+        event.target.value = '';
+    };
+
+    reader.readAsText(file);
+}
+
+// ============ 유틸리티 ============
+function showToast(message, type = 'info') {
+    // 기존 토스트 제거
+    const existingToast = document.querySelector('.toast');
+    if (existingToast) {
+        existingToast.remove();
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+
+// 전역 함수 노출 (onclick 핸들러용)
+window.deleteMember = deleteMember;
+window.deleteExpense = deleteExpense;
+window.deleteSubscription = deleteSubscription;
+window.convertToSubscription = convertToSubscription;
+window.changeQuarter = changeQuarter;
+window.fetchExchangeRate = fetchExchangeRate;
+window.exportData = exportData;
+window.importData = importData;
