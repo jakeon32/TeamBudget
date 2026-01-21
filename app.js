@@ -125,12 +125,45 @@ function getQuarterExpenses() {
     const subscriptionExpenses = [];
     state.subscriptions.forEach(sub => {
         months.forEach(month => {
-            subscriptionExpenses.push({
-                ...sub,
-                id: `${sub.id}-${month}`,
-                date: `${year}-${String(month).padStart(2, '0')}-01`,
-                isVirtual: true // 가상 지출 표시
-            });
+            // 해당 월에 이미 확정된 지출이 있는지 확인
+            const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+            const isConfirmed = state.expenses.some(e =>
+                e.subscriptionId === sub.id &&
+                e.subscriptionMonth === yearMonth
+            );
+
+            if (!isConfirmed) {
+                // 결제일 계산 (기존 생성일의 '일' 사용)
+                const createdDay = new Date(sub.createdAt).getDate();
+                const paymentDate = new Date(year, month - 1, createdDay);
+                const today = new Date();
+
+                // 만약 생성일이 말일이라서 현재 월에 해당 일자가 없다면 말일로 조정 (예: 31일 -> 2월 28일)
+                if (paymentDate.getMonth() !== month - 1) {
+                    paymentDate.setDate(0); // 전달 말일(=이번달 0일)인데 로직상 좀 복잡하니 단순화
+                    // JS Date setDate(0)는 전달 마지막날. 
+                    // 그냥 해당 월의 마지막 날짜를 구해서 비교하는게 나음.
+                }
+
+                // 정확한 날짜 재계산
+                const lastDayOfMonth = new Date(year, month, 0).getDate();
+                const targetDay = Math.min(createdDay, lastDayOfMonth);
+                const targetDateStr = `${year}-${String(month).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+                const targetDateObj = new Date(targetDateStr);
+
+                // 결제일이 지났는지 여부
+                const isDue = targetDateObj <= today;
+
+                subscriptionExpenses.push({
+                    ...sub,
+                    id: `sub-${sub.id}-${month}`,
+                    originalId: sub.id, // 원본 ID 유지
+                    date: targetDateStr,
+                    isVirtual: true, // 가상 지출 표시
+                    isDue: isDue, // 결제일 도래/경과 여부
+                    subscriptionMonth: yearMonth
+                });
+            }
         });
     });
 
@@ -472,6 +505,43 @@ function deleteSubscription(id) {
     }
 }
 
+// 구독 결제 확정 (환율 적용하여 실제 지출로 변환)
+function confirmSubscription(subId, dateStr, originalId) {
+    const subscription = state.subscriptions.find(s => s.id === originalId);
+    if (!subscription) return;
+
+    if (!confirm(`${dateStr} 결제 건을 확정하시겠습니까?\n현재 환율(₩${state.exchangeRate.toLocaleString('ko-KR')})이 적용됩니다.`)) {
+        return;
+    }
+
+    const amountKRW = subscription.currency === 'USD'
+        ? Math.round(subscription.amount * state.exchangeRate)
+        : subscription.amount;
+
+    // 'YYYY-MM' 형식 추출
+    const subscriptionMonth = dateStr.substring(0, 7);
+
+    const expense = {
+        id: Date.now(),
+        memberId: subscription.memberId,
+        date: dateStr,
+        category: subscription.category,
+        description: `${subscription.description} (정기결제)`,
+        currency: subscription.currency,
+        amount: subscription.amount,
+        amountKRW: amountKRW,
+        exchangeRateUsed: state.exchangeRate,
+        isSubscription: true,
+        subscriptionId: subscription.id, // 어떤 구독에서 왔는지
+        subscriptionMonth: subscriptionMonth // 어느 달 분인지
+    };
+
+    state.expenses.push(expense);
+    saveToStorage();
+    renderAll();
+    showToast('구독 결제가 확정되었습니다.', 'success');
+}
+
 function deleteExpense(id) {
     const expense = state.expenses.find(e => e.id === id);
     if (!expense) return;
@@ -744,27 +814,38 @@ function renderExpenseTable() {
 
         const subscriptionBadge = expense.isSubscription ? '<span class="subscription-badge">월정기</span>' : '';
 
-        // 구독 서비스인데 아직 월정기가 아닌 경우 전환 버튼 표시
+        // 구독 서비스인데 아직 월정기가 아닌 경우 전환 버튼 표시 (일반 지출인 경우)
         const canConvert = expense.category === '구독서비스' && !expense.isSubscription && !expense.isVirtual;
         const convertButton = canConvert
             ? `<button class="btn btn-secondary btn-sm" onclick="convertToSubscription(${expense.id})">월정기</button>`
             : '';
 
-        // 가상 지출(구독에서 생성)은 삭제 버튼 대신 구독 관리로 안내
-        const deleteButton = expense.isVirtual
-            ? ''
-            : `<button class="btn btn-danger btn-sm" onclick="deleteExpense(${expense.id})">삭제</button>`;
+        // 가상 지출(구독)인 경우: 결제일이 지났으면 '확정' 버튼, 아니면 '예정' 표시
+        let actionButtons = '';
+        if (expense.isVirtual) {
+            if (expense.isDue) {
+                // 인자를 문자열로 안전하게 전달하기 위해 따옴표 처리 주의
+                actionButtons = `<button class="btn btn-primary btn-sm" onclick="confirmSubscription('${expense.id}', '${expense.date}', ${expense.originalId})">결제확정</button>`;
+            } else {
+                actionButtons = `<span class="status-badge pending">예정</span>`;
+            }
+        } else {
+            // 일반 지출 또는 확정된 지출
+            actionButtons = `
+                ${convertButton}
+                <button class="btn btn-danger btn-sm" onclick="deleteExpense(${expense.id})">삭제</button>
+            `;
+        }
 
         return `
-            <tr>
+            <tr class="${expense.isVirtual ? 'virtual-row' : ''} ${expense.isDue ? 'due-row' : ''}">
                 <td>${expense.date}</td>
                 <td>${memberName}</td>
                 <td>${expense.category}${subscriptionBadge}</td>
                 <td>${expense.description}</td>
                 <td>${amountDisplay}</td>
                 <td>
-                    ${convertButton}
-                    ${deleteButton}
+                    ${actionButtons}
                 </td>
             </tr>
         `;
