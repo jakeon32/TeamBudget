@@ -1009,7 +1009,9 @@ body {
     background: rgba(0, 0, 0, 0.5);
     z-index: 1000;
     justify-content: center;
+    /* Center horizontally */
     align-items: center;
+    /* Center vertically */
     animation: fadeIn 0.2s ease-out;
 }
 

@@ -1421,3 +1421,11 @@ window.toggleTeamDropdown = toggleTeamDropdown;
 window.editTeam = editTeam;
 window.cancelEdit = cancelEdit;
 window.updateTeam = updateTeam;
+
+// 모달 배경 클릭 시 닫기
+window.onclick = function (event) {
+    if (event.target.classList.contains('modal')) {
+        event.target.style.display = 'none'; // Team Modal
+        event.target.classList.remove('active'); // Settings Modal
+    }
+}
