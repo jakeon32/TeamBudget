@@ -385,13 +385,19 @@ function handleSettingsSubmit(e) {
 
 // 팀 관리 로직
 function openTeamModal() {
-    document.getElementById('teamModal').style.display = 'block';
+    const modal = document.getElementById('teamModal');
+    modal.style.display = ''; // 기존 inline style 제거
+    modal.classList.add('active');
     renderTeamList();
     document.getElementById('newTeamName').focus();
 }
 
 function closeTeamModal() {
-    document.getElementById('teamModal').style.display = 'none';
+    const modal = document.getElementById('teamModal');
+    modal.classList.remove('active');
+    setTimeout(() => {
+        modal.style.display = ''; // 애니메이션 후 정리
+    }, 200);
 }
 
 function handleTeamSubmit(e) {
@@ -557,6 +563,15 @@ function renderTeamSelect() {
     if (currentVal && state.teams.some(t => t.id == currentVal)) {
         select.value = currentVal;
     }
+
+    // 변경 시 팀원 목록 필터와 동기화
+    select.onchange = function () {
+        const filterSelect = document.getElementById('memberListTeamFilter');
+        if (filterSelect) {
+            filterSelect.value = this.value;
+            renderMemberList();
+        }
+    };
 }
 
 // 구독 옵션 표시/숨김
@@ -641,6 +656,13 @@ function renderMemberList() {
 
     // 팀이 선택되지 않은 경우
     const selectedTeamId = filterSelect ? filterSelect.value : '';
+
+    // 팀원 등록 폼의 팀 선택도 동기화
+    const memberTeamSelect = document.getElementById('memberTeam');
+    if (memberTeamSelect && selectedTeamId) {
+        memberTeamSelect.value = selectedTeamId;
+    }
+
     if (!selectedTeamId) {
         container.innerHTML = '<p class="empty-state">팀을 선택해주세요.</p>';
         return;
