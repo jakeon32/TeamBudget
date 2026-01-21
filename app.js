@@ -1099,8 +1099,10 @@ function renderRecentExpenses() {
         return;
     }
 
-    // 최근 지출 (구독 포함)
+    // 최근 지출 (오늘 이전 날짜만 표시)
+    const today = new Date().toISOString().split('T')[0];
     const recentExpenses = [...quarterExpenses]
+        .filter(e => e.date <= today) // 미래 날짜 숨김
         .sort((a, b) => new Date(b.date) - new Date(a.date))
         .slice(0, 5);
 
