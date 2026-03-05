@@ -186,6 +186,7 @@ document.addEventListener('click', function (e) {
 // 필터 월 옵션 업데이트
 function updateFilterMonths() {
     const filterMonth = document.getElementById('filterMonth');
+    const currentValue = filterMonth.value;
     const months = QUARTER_MONTHS[state.currentQuarter];
 
     filterMonth.innerHTML = '<option value="all">전체 월</option>';
@@ -195,6 +196,11 @@ function updateFilterMonths() {
         option.textContent = MONTH_NAMES[month];
         filterMonth.appendChild(option);
     });
+
+    // 이전 선택값 복원
+    if (currentValue && [...filterMonth.options].some(o => o.value === currentValue)) {
+        filterMonth.value = currentValue;
+    }
 }
 
 // 현재 팀의 예산 가져오기
