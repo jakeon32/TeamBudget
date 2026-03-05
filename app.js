@@ -222,7 +222,7 @@ function getQuarterExpenses() {
     const regularExpenses = state.expenses.filter(expense => {
         const expenseMonth = new Date(expense.date).getMonth() + 1;
         const expenseYear = new Date(expense.date).getFullYear();
-        const isInTeam = teamMemberIds.includes(expense.memberId);
+        const isInTeam = teamMemberIds.includes(expense.memberId) || expense.memberId === 'team';
         return isInTeam && expenseYear === year && months.includes(expenseMonth);
     });
 
@@ -406,6 +406,8 @@ function initForms() {
 
     // 카테고리 변경 시 구독 옵션 표시/숨김
     document.getElementById('expenseCategory').addEventListener('change', toggleSubscriptionOption);
+    // 팀원 변경 시 구독 옵션 재확인
+    document.getElementById('expenseMember').addEventListener('change', toggleSubscriptionOption);
 }
 
 // ============ 설정 관리 ============
@@ -653,10 +655,11 @@ function renderTeamSelect() {
 // 구독 옵션 표시/숨김
 function toggleSubscriptionOption() {
     const category = document.getElementById('expenseCategory').value;
+    const memberValue = document.getElementById('expenseMember').value;
     const subscriptionOption = document.getElementById('subscriptionOption');
     const isSubscriptionCheckbox = document.getElementById('isSubscription');
 
-    if (category === '구독서비스') {
+    if (category === '구독서비스' && memberValue !== 'team') {
         subscriptionOption.style.display = 'block';
     } else {
         subscriptionOption.style.display = 'none';
@@ -795,6 +798,12 @@ function updateMemberSelect() {
             ? '<option value="all">전체 팀원</option>'
             : '<option value="">팀원 선택</option>';
 
+        // 팀 전체 옵션 추가
+        const teamOption = document.createElement('option');
+        teamOption.value = 'team';
+        teamOption.textContent = '팀 전체';
+        select.appendChild(teamOption);
+
         state.members.forEach(member => {
             const option = document.createElement('option');
             option.value = member.id;
@@ -813,7 +822,8 @@ function updateMemberSelect() {
 function handleExpenseSubmit(e) {
     e.preventDefault();
 
-    const memberId = parseInt(document.getElementById('expenseMember').value);
+    const memberValue = document.getElementById('expenseMember').value;
+    const memberId = memberValue === 'team' ? 'team' : parseInt(memberValue);
     const date = document.getElementById('expenseDate').value;
     const category = document.getElementById('expenseCategory').value;
     const description = document.getElementById('expenseDescription').value.trim();
@@ -821,7 +831,7 @@ function handleExpenseSubmit(e) {
     const amount = parseFloat(document.getElementById('expenseAmount').value);
     const isSubscription = document.getElementById('isSubscription').checked;
 
-    if (!memberId || !date || !category || !description || !amount) {
+    if ((!memberId && memberId !== 'team') || !date || !category || !description || !amount) {
         showToast('모든 필드를 입력해주세요.', 'error');
         return;
     }
@@ -1005,7 +1015,13 @@ function getFilteredExpenses() {
         const expenseMonth = new Date(expense.date).getMonth() + 1;
 
         if (monthFilter !== 'all' && expenseMonth !== parseInt(monthFilter)) return false;
-        if (memberFilter !== 'all' && expense.memberId !== parseInt(memberFilter)) return false;
+        if (memberFilter !== 'all') {
+            if (memberFilter === 'team') {
+                if (expense.memberId !== 'team') return false;
+            } else if (expense.memberId !== parseInt(memberFilter)) {
+                return false;
+            }
+        }
         if (categoryFilter !== 'all' && expense.category !== categoryFilter) return false;
 
         return true;
@@ -1141,6 +1157,12 @@ function renderMemberUsage() {
     }
 
     const quarterExpenses = getQuarterExpenses();
+
+    // 팀 전체 비용 합계
+    const teamTotal = quarterExpenses
+        .filter(e => e.memberId === 'team')
+        .reduce((sum, e) => sum + e.amountKRW, 0);
+
     const memberUsages = state.members.map(member => {
         const totalUsed = quarterExpenses
             .filter(e => e.memberId === member.id)
@@ -1148,9 +1170,10 @@ function renderMemberUsage() {
         return { ...member, totalUsed };
     }).sort((a, b) => b.totalUsed - a.totalUsed);
 
-    const maxUsage = Math.max(...memberUsages.map(m => m.totalUsed), 1);
+    // 팀 전체 포함하여 최대값 계산
+    const maxUsage = Math.max(...memberUsages.map(m => m.totalUsed), teamTotal, 1);
 
-    container.innerHTML = memberUsages.map(member => {
+    let html = memberUsages.map(member => {
         const percentage = (member.totalUsed / maxUsage) * 100;
         return `
             <div class="member-usage-item">
@@ -1164,6 +1187,24 @@ function renderMemberUsage() {
             </div>
         `;
     }).join('');
+
+    // 팀 전체 비용이 있으면 별도 행 추가
+    if (teamTotal > 0) {
+        const percentage = (teamTotal / maxUsage) * 100;
+        html += `
+            <div class="member-usage-item team-usage">
+                <div class="member-info">
+                    <span class="name">👥 팀 전체</span>
+                    <span class="amount">₩${teamTotal.toLocaleString('ko-KR')}</span>
+                </div>
+                <div class="usage-bar">
+                    <div class="usage-fill team-fill" style="width: ${percentage}%"></div>
+                </div>
+            </div>
+        `;
+    }
+
+    container.innerHTML = html;
 }
 
 function renderRecentExpenses() {
@@ -1183,8 +1224,7 @@ function renderRecentExpenses() {
         .slice(0, 5);
 
     let html = recentExpenses.map(expense => {
-        const member = state.members.find(m => m.id === expense.memberId);
-        const memberName = member ? member.name : '알 수 없음';
+        const memberName = expense.memberId === 'team' ? '팀 전체' : (state.members.find(m => m.id === expense.memberId)?.name || '알 수 없음');
         const subscriptionBadge = expense.isSubscription ? '<span class="subscription-badge">월정기</span>' : '';
 
         return `
@@ -1226,8 +1266,7 @@ function renderExpenseTable() {
     );
 
     tbody.innerHTML = sortedExpenses.map(expense => {
-        const member = state.members.find(m => m.id === expense.memberId);
-        const memberName = member ? member.name : '알 수 없음';
+        const memberName = expense.memberId === 'team' ? '팀 전체' : (state.members.find(m => m.id === expense.memberId)?.name || '알 수 없음');
 
         const amountDisplay = expense.currency === 'USD'
             ? `$${expense.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span class="currency-tag">USD</span><br><small style="color: var(--text-light)">₩${expense.amountKRW.toLocaleString('ko-KR')}</small>`
@@ -1383,13 +1422,14 @@ function exportToExcel() {
 
         // ========== 시트 1: 지출 내역 ==========
         const expenseData = state.expenses.map(expense => {
-            const member = state.members.find(m => m.id === expense.memberId);
+            const isTeamExpense = expense.memberId === 'team';
+            const member = isTeamExpense ? null : state.members.find(m => m.id === expense.memberId);
             const team = member && member.teamId ? state.teams.find(t => t.id === member.teamId) : null;
 
             return {
                 '날짜': expense.date,
-                '팀명': team ? team.name : '-',
-                '이름': member ? member.name : '(삭제됨)',
+                '팀명': isTeamExpense ? '-' : (team ? team.name : '-'),
+                '이름': isTeamExpense ? '팀 전체' : (member ? member.name : '(삭제됨)'),
                 '카테고리': expense.category,
                 '내용': expense.description,
                 '금액(원화)': expense.amountKRW,

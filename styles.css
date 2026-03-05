@@ -530,6 +530,16 @@ body {
     transition: width 0.3s ease;
 }
 
+.member-usage-item.team-usage {
+    border-top: 1px dashed #e2e8f0;
+    padding-top: 8px;
+    margin-top: 4px;
+}
+
+.member-usage-item .usage-fill.team-fill {
+    background: #f59e0b;
+}
+
 /* Recent Expenses */
 .recent-expenses {
     display: flex;
