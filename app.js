@@ -261,11 +261,18 @@ function getQuarterExpenses() {
                     // 결제일이 지났는지 여부
                     const isDue = targetDateObj <= today;
 
+                    // USD 구독은 현재 환율로 재계산
+                    const recalcAmountKRW = sub.currency === 'USD'
+                        ? Math.round(sub.amount * state.exchangeRate)
+                        : sub.amountKRW;
+
                     subscriptionExpenses.push({
                         ...sub,
                         id: `sub-${sub.id}-${month}`,
                         originalId: sub.id, // 원본 ID 유지
                         date: targetDateStr,
+                        amountKRW: recalcAmountKRW,
+                        exchangeRateUsed: sub.currency === 'USD' ? state.exchangeRate : null,
                         isVirtual: true, // 가상 지출 표시
                         isDue: isDue, // 결제일 도래/경과 여부
                         subscriptionMonth: yearMonth
