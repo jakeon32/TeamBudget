@@ -17,7 +17,8 @@ let state = {
     expenses: [],
     subscriptions: [], // 월 정기 구독 목록
     teams: [], // 팀 목록 (각 팀은 { id, name, quarterBudget } 구조)
-    exchangeRate: 1450, // 기본 환율 (실시간으로 업데이트됨)
+    exchangeRate: 1400, // 기본 환율
+    exchangeRateLocked: true, // 환율 고정 여부 (기본: 고정)
     currentQuarter: 1, // 현재 선택된 분기
     currentTeamId: null, // 현재 선택된 팀 ID
     // 설정 (기본값) - 하위 호환용
@@ -50,6 +51,8 @@ function loadFromStorage() {
         state.expenses = data.expenses || [];
         state.subscriptions = data.subscriptions || [];
         state.teams = data.teams || []; // 팀 데이터 로드
+        state.exchangeRateLocked = data.exchangeRateLocked !== undefined ? data.exchangeRateLocked : true;
+        if (data.exchangeRate) state.exchangeRate = data.exchangeRate;
         // 설정 로드 (기존 데이터에 없으면 기본값 유지)
         if (data.config) {
             state.config = { ...state.config, ...data.config };
@@ -122,7 +125,9 @@ function saveToStorage() {
         subscriptions: state.subscriptions,
         teams: state.teams,
         config: state.config,
-        currentTeamId: state.currentTeamId
+        currentTeamId: state.currentTeamId,
+        exchangeRate: state.exchangeRate,
+        exchangeRateLocked: state.exchangeRateLocked
     }));
 }
 
@@ -275,6 +280,14 @@ function getQuarterExpenses() {
 // ============ 환율 API ============
 async function fetchExchangeRate() {
     const rateElement = document.getElementById('exchangeRate');
+
+    // 환율 고정 상태면 API 호출하지 않음
+    if (state.exchangeRateLocked) {
+        rateElement.textContent = `₩${state.exchangeRate.toLocaleString('ko-KR')} (고정)`;
+        updateExchangeRateLockUI();
+        return;
+    }
+
     rateElement.textContent = '로딩중...';
 
     try {
@@ -289,6 +302,69 @@ async function fetchExchangeRate() {
         rateElement.textContent = `₩${state.exchangeRate.toLocaleString('ko-KR')} (기본값)`;
         showToast('환율 조회에 실패했습니다. 기본값을 사용합니다.', 'error');
     }
+    updateExchangeRateLockUI();
+}
+
+// 환율 고정 UI 상태 업데이트
+function updateExchangeRateLockUI() {
+    const lockBtn = document.getElementById('btnExchangeLock');
+    const refreshBtn = document.querySelector('.exchange-rate .btn-refresh');
+    if (lockBtn) {
+        lockBtn.textContent = state.exchangeRateLocked ? '🔒' : '🔓';
+        lockBtn.title = state.exchangeRateLocked ? '환율 고정 해제' : '환율 고정';
+    }
+    if (refreshBtn) {
+        refreshBtn.style.display = state.exchangeRateLocked ? 'none' : '';
+    }
+}
+
+// 환율 고정 토글
+function toggleExchangeRateLock() {
+    if (state.exchangeRateLocked) {
+        // 고정 해제 → 실시간 환율로 전환
+        state.exchangeRateLocked = false;
+        saveToStorage();
+        fetchExchangeRate();
+        showToast('환율 고정이 해제되었습니다. 실시간 환율을 사용합니다.', 'success');
+    } else {
+        // 고정 설정 → 모달 열기
+        openExchangeRateModal();
+    }
+}
+
+// 환율 고정 모달 열기
+function openExchangeRateModal() {
+    const modal = document.getElementById('exchangeRateModal');
+    const input = document.getElementById('fixedExchangeRateInput');
+    input.value = Math.round(state.exchangeRate);
+    modal.classList.add('active');
+    setTimeout(() => { input.focus(); input.select(); }, 100);
+    input.onkeydown = (e) => { if (e.key === 'Enter') applyFixedExchangeRate(); };
+}
+
+// 환율 고정 모달 닫기
+function closeExchangeRateModal() {
+    document.getElementById('exchangeRateModal').classList.remove('active');
+}
+
+// 환율 고정 적용
+function applyFixedExchangeRate() {
+    const input = document.getElementById('fixedExchangeRateInput');
+    const value = parseFloat(input.value);
+    if (!value || value <= 0) {
+        showToast('올바른 환율을 입력해주세요.', 'error');
+        return;
+    }
+    state.exchangeRate = value;
+    state.exchangeRateLocked = true;
+    saveToStorage();
+    closeExchangeRateModal();
+
+    const rateElement = document.getElementById('exchangeRate');
+    rateElement.textContent = `₩${state.exchangeRate.toLocaleString('ko-KR')} (고정)`;
+    updateExchangeRateLockUI();
+    renderAll();
+    showToast(`환율이 ₩${value.toLocaleString('ko-KR')}으로 고정되었습니다.`, 'success');
 }
 
 // ============ 탭 관리 ============
@@ -1208,7 +1284,11 @@ function exportData() {
         exportDate: new Date().toISOString(),
         members: state.members,
         expenses: state.expenses,
-        config: state.config
+        subscriptions: state.subscriptions,
+        teams: state.teams,
+        config: state.config,
+        exchangeRate: state.exchangeRate,
+        exchangeRateLocked: state.exchangeRateLocked
     };
 
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1262,7 +1342,15 @@ function importData(event) {
             if (data.config) {
                 state.config = data.config;
             }
+            // 환율 설정 복원 (없으면 현재 값 유지)
+            if (data.exchangeRate !== undefined) {
+                state.exchangeRate = data.exchangeRate;
+            }
+            if (data.exchangeRateLocked !== undefined) {
+                state.exchangeRateLocked = data.exchangeRateLocked;
+            }
             saveToStorage();
+            fetchExchangeRate(); // 환율 UI 갱신
             renderAll();
 
             const memberCount = data.members.length;
@@ -1419,6 +1507,10 @@ window.openTeamModal = openTeamModal;
 window.closeTeamModal = closeTeamModal;
 window.deleteTeam = deleteTeam;
 window.toggleTeamDropdown = toggleTeamDropdown;
+window.toggleExchangeRateLock = toggleExchangeRateLock;
+window.openExchangeRateModal = openExchangeRateModal;
+window.closeExchangeRateModal = closeExchangeRateModal;
+window.applyFixedExchangeRate = applyFixedExchangeRate;
 window.editTeam = editTeam;
 window.cancelEdit = cancelEdit;
 window.updateTeam = updateTeam;
